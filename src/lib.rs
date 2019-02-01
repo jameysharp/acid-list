@@ -32,10 +32,13 @@ impl std::error::Error for Error {}
 pub type NodeIndex = u32;
 const HEAD_FLAG: NodeIndex = 1 << 31;
 
+#[derive(Clone, PartialEq, Eq)]
 pub enum LinkIndex {
     Node(NodeIndex),
     Head(NodeIndex),
 }
+
+impl Copy for LinkIndex {}
 
 impl LinkIndex {
     fn to_node(self) -> NodeIndex {
@@ -54,6 +57,12 @@ impl LinkIndex {
     }
 }
 
+// XXX: Header could be a caller-provided repr(C) type implementing a
+// trait for the few things that AcidList actually needs from it,
+// including one method for validating the header on open and returning
+// a caller-meaningful error if that fails. Then applications could
+// store extra metadata for interpreting list contents, or schema
+// information to validate against the running version's schema.
 #[repr(C)]
 pub struct Header<T> {
     magic: u32,
@@ -102,6 +111,14 @@ struct Link {
 }
 
 impl Copy for Link {}
+
+#[derive(Clone)]
+pub struct NodeNeighbors {
+    pub previous: LinkIndex,
+    pub next: LinkIndex,
+}
+
+impl Copy for NodeNeighbors {}
 
 #[repr(C)]
 struct Node<T> {
@@ -260,10 +277,18 @@ impl<T> AcidList<T> {
         &self.node(idx).contents
     }
 
+    pub fn neighbors(&self, idx: LinkIndex) -> NodeNeighbors {
+        let link = self.link(idx);
+        NodeNeighbors {
+            previous: LinkIndex::from_node(link.previous),
+            next: LinkIndex::from_node(link.next),
+        }
+    }
+
     pub fn move_after(&mut self, from_idx: NodeIndex, to_previous_idx: LinkIndex) {
-        let from = self.link(from_idx);
-        let to_previous_idx = to_previous_idx.to_node();
+        let from = self.link(LinkIndex::Node(from_idx));
         let to_next_idx = self.link(to_previous_idx).next;
+        let to_previous_idx = to_previous_idx.to_node();
 
         self.link_mut(from.next).previous = from.previous;
         self.link_mut(from.previous).next = from.next;
@@ -305,8 +330,8 @@ impl<T> AcidList<T> {
         unsafe { &mut *self.node_ptr(idx) }
     }
 
-    fn link(&self, idx: NodeIndex) -> Link {
-        match LinkIndex::from_node(idx) {
+    fn link(&self, idx: LinkIndex) -> Link {
+        match idx {
             LinkIndex::Node(idx) => self.node(idx).link,
             LinkIndex::Head(idx) => *self.head(idx),
         }

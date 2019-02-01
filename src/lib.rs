@@ -286,9 +286,16 @@ impl<T> AcidList<T> {
     }
 
     pub fn move_after(&mut self, from_idx: NodeIndex, to_previous_idx: LinkIndex) {
+        assert!(LinkIndex::Node(from_idx) != to_previous_idx);
+
         let from = self.link(LinkIndex::Node(from_idx));
         let to_next_idx = self.link(to_previous_idx).next;
         let to_previous_idx = to_previous_idx.to_node();
+
+        if from.previous == to_previous_idx {
+            // node is already in the requested spot
+            return;
+        }
 
         self.link_mut(from.next).previous = from.previous;
         self.link_mut(from.previous).next = from.next;

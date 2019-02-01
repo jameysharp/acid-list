@@ -14,6 +14,7 @@ use std::os::unix::io::AsRawFd;
 enum Error {
     NotInitialized,
     WrongArchitecture,
+    WrongDataType,
 }
 
 impl fmt::Display for Error {
@@ -21,6 +22,7 @@ impl fmt::Display for Error {
         match self {
             Error::NotInitialized => write!(f, "can't open uninitialized backing file"),
             Error::WrongArchitecture => write!(f, "can't open file from a different architecture"),
+            Error::WrongDataType => write!(f, "can't open file with differently sized data"),
         }
     }
 }
@@ -53,10 +55,12 @@ impl LinkIndex {
 }
 
 #[repr(C)]
-pub struct Header {
+pub struct Header<T> {
     magic: u32,
+    data_size: u32,
     pub heads: NodeIndex,
     pub nodes: NodeIndex,
+    marker: PhantomData<Node<T>>,
 }
 
 const HEADER_MAGIC: u32 = 0x41434944; // "ACID"
@@ -66,12 +70,14 @@ fn align_to<T>(offset: u64) -> u64 {
     (offset + (align - 1)) / align * align
 }
 
-impl Header {
+impl<T> Header<T> {
     pub fn new(heads: NodeIndex, nodes: NodeIndex) -> Self {
         Header {
             magic: HEADER_MAGIC,
+            data_size: mem::size_of::<T>() as u32,
             heads,
             nodes,
+            marker: PhantomData,
         }
     }
 
@@ -79,12 +85,12 @@ impl Header {
         align_to::<Link>(mem::size_of_val(self) as u64)
     }
 
-    fn nodes_offset<T>(&self) -> u64 {
+    fn nodes_offset(&self) -> u64 {
         align_to::<Node<T>>(self.heads_offset() + self.heads as u64 * mem::size_of::<Link>() as u64)
     }
 
-    fn file_size<T>(&self) -> u64 {
-        self.nodes_offset::<T>() + self.nodes as u64 * mem::size_of::<Node<T>>() as u64
+    fn file_size(&self) -> u64 {
+        self.nodes_offset() + self.nodes as u64 * mem::size_of::<Node<T>>() as u64
     }
 }
 
@@ -110,16 +116,19 @@ pub struct AcidList<T> {
 }
 
 impl<T> AcidList<T> {
-    pub fn create(path: String, header: Header) -> io::Result<Self> {
+    pub fn create<P>(path: P, header: Header<T>) -> io::Result<Self>
+    where
+        P: AsRef<std::path::Path>,
+    {
         let mut file = fs::OpenOptions::new()
             .create_new(true)
             .read(true)
             .write(true)
             .open(path)?;
-        file.set_len(header.file_size::<T>())?;
+        file.set_len(header.file_size())?;
         file.write_all(unsafe {
             std::slice::from_raw_parts(
-                &header as *const Header as *const u8,
+                &header as *const Header<T> as *const u8,
                 mem::size_of_val(&header),
             )
         })?;
@@ -171,7 +180,7 @@ impl<T> AcidList<T> {
         let len = len as libc::size_t;
 
         // ensure that list.header() can be called without SIGBUS
-        let expected_size = mem::size_of::<Header>();
+        let expected_size = mem::size_of::<Header<T>>();
         if len < expected_size {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
@@ -202,7 +211,14 @@ impl<T> AcidList<T> {
             ));
         }
 
-        let expected_size = header.file_size::<T>();
+        if header.data_size as usize != mem::size_of::<T>() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                Error::WrongDataType,
+            ));
+        }
+
+        let expected_size = header.file_size();
         if header.heads < 1
             || expected_size > usize::max_value() as u64
             || len != expected_size as usize
@@ -231,8 +247,8 @@ impl<T> AcidList<T> {
         Ok(())
     }
 
-    pub fn header(&self) -> &Header {
-        let header = self.base as *const Header;
+    pub fn header(&self) -> &Header<T> {
+        let header = self.base as *const Header<T>;
         unsafe { &*header }
     }
 
@@ -277,7 +293,7 @@ impl<T> AcidList<T> {
     unsafe fn node_ptr(&self, idx: NodeIndex) -> *mut Node<T> {
         assert!(idx < self.header().nodes);
         let base = self.base as *mut u8;
-        let nodes = base.offset(self.header().nodes_offset::<T>() as isize) as *mut Node<T>;
+        let nodes = base.offset(self.header().nodes_offset() as isize) as *mut Node<T>;
         nodes.offset(idx as isize)
     }
 

@@ -285,26 +285,44 @@ impl<T> AcidList<T> {
         }
     }
 
-    pub fn move_after(&mut self, from_idx: NodeIndex, to_previous_idx: LinkIndex) {
-        assert!(LinkIndex::Node(from_idx) != to_previous_idx);
+    pub fn move_before(&mut self, from_idx: NodeIndex, to_next_idx: LinkIndex) {
+        assert!(LinkIndex::Node(from_idx) != to_next_idx);
 
         let from = self.link(LinkIndex::Node(from_idx));
-        let to_next_idx = self.link(to_previous_idx).next;
-        let to_previous_idx = to_previous_idx.to_node();
 
-        if from.previous == to_previous_idx {
+        if from.next == to_next_idx.to_node() {
             // node is already in the requested spot
             return;
         }
 
+        self.move_to(from_idx, from, Link {
+            previous: self.link(to_next_idx).previous,
+            next: to_next_idx.to_node(),
+        });
+    }
+
+    pub fn move_after(&mut self, from_idx: NodeIndex, to_previous_idx: LinkIndex) {
+        assert!(LinkIndex::Node(from_idx) != to_previous_idx);
+
+        let from = self.link(LinkIndex::Node(from_idx));
+
+        if from.previous == to_previous_idx.to_node() {
+            // node is already in the requested spot
+            return;
+        }
+
+        self.move_to(from_idx, from, Link {
+            previous: to_previous_idx.to_node(),
+            next: self.link(to_previous_idx).next,
+        });
+    }
+
+    fn move_to(&mut self, from_idx: NodeIndex, from: Link, to: Link) {
         self.link_mut(from.next).previous = from.previous;
         self.link_mut(from.previous).next = from.next;
-        *self.link_mut(from_idx) = Link {
-            previous: to_previous_idx,
-            next: to_next_idx,
-        };
-        self.link_mut(to_next_idx).previous = from_idx;
-        self.link_mut(to_previous_idx).next = from_idx;
+        *self.link_mut(from_idx) = to;
+        self.link_mut(to.next).previous = from_idx;
+        self.link_mut(to.previous).next = from_idx;
     }
 
     unsafe fn head_ptr(&self, idx: NodeIndex) -> *mut Link {

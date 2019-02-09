@@ -13,6 +13,12 @@ fn main() -> io::Result<()> {
         .parse()
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
 
+    let direction = match &*args.next().ok_or(io::ErrorKind::InvalidInput)? {
+        "before" => AcidList::move_before,
+        "after" => AcidList::move_after,
+        other => return Err(io::Error::new(io::ErrorKind::InvalidInput, other)),
+    };
+
     let kind = match &*args.next().ok_or(io::ErrorKind::InvalidInput)? {
         "head" => LinkIndex::Head,
         "node" => LinkIndex::Node,
@@ -28,7 +34,7 @@ fn main() -> io::Result<()> {
     let file = std::fs::OpenOptions::new().read(true).write(true).open(path)?;
     let mut list = AcidList::<[u8; 32]>::open(file)?;
 
-    list.move_after(from_idx, kind(to_idx));
+    direction(&mut list, from_idx, kind(to_idx));
 
     list.close()
 }
